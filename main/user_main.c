@@ -13,7 +13,6 @@
 #include "esp_err.h"
 #include "internal/esp_wifi_internal.h"
 #include "nvs_flash.h"
-#include "app_mqtt_handle.h"
 #include "rom/ets_sys.h"
 #include "driver/uart.h"
 #include "tcpip_adapter.h"
@@ -235,13 +234,14 @@ static void sc_callback(smartconfig_status_t status, void *pdata)
 {
     switch (status)
     {
-    case SC_STATUS_LINK:
+    case SC_STATUS_LINK:{
         wifi_config_t *wifi_config = pdata;
         ESP_LOGI(TAG, "SSID:%s", wifi_config->sta.ssid);
         ESP_LOGI(TAG, "PASSWORD:%s", wifi_config->sta.password);
         ESP_ERROR_CHECK(esp_wifi_disconnect());
         ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, wifi_config));
         ESP_ERROR_CHECK(esp_wifi_connect());
+       }
         break;
     case SC_STATUS_LINK_OVER:
         ESP_LOGI(TAG, "SC_STATUS_LINK_OVER");
