@@ -17,6 +17,7 @@
 #include "driver/uart.h"
 #include "tcpip_adapter.h"
 #include "esp_smartconfig.h"
+#include "smartconfig_ack.h"
 #include "airkiss.h"
 #include "lwip/err.h"
 #include "lwip/sockets.h"
@@ -35,6 +36,7 @@
 static EventGroupHandle_t wifi_event_group;
 static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
+static const int AIRKISS_DONE_BIT = BIT2;
 
 static xTaskHandle handleLlocalFind = NULL;
 static const char *TAG = "xAirKiss";
@@ -133,16 +135,13 @@ static void TaskCreatSocket(void *pvParameters)
         {
             rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
             ESP_LOGI(TAG, "Received %d bytes : %s", len, rx_buffer);
-
-            uint16_t i;
             airkiss_lan_ret_t ret = airkiss_lan_recv(rx_buffer, len, &akconf);
             airkiss_lan_ret_t packret;
             switch (ret)
             {
             case AIRKISS_LAN_SSDP_REQ:
 
-                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_RESP_CMD,
-                                           ACCOUNT_ID, deviceInfo, 0, 0, lan_buf, &lan_buf_len, &akconf);
+                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_RESP_CMD, ACCOUNT_ID, deviceInfo, 0, 0, lan_buf, &lan_buf_len, &akconf);
 
                 if (packret != AIRKISS_LAN_PAKE_READY)
                 {
@@ -234,25 +233,40 @@ static void sc_callback(smartconfig_status_t status, void *pdata)
 {
     switch (status)
     {
-    case SC_STATUS_LINK:{
+    case SC_STATUS_LINK:
+    {
         wifi_config_t *wifi_config = pdata;
         ESP_LOGI(TAG, "SSID:%s", wifi_config->sta.ssid);
         ESP_LOGI(TAG, "PASSWORD:%s", wifi_config->sta.password);
         ESP_ERROR_CHECK(esp_wifi_disconnect());
         ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, wifi_config));
         ESP_ERROR_CHECK(esp_wifi_connect());
-       }
-        break;
+    }
+    break;
     case SC_STATUS_LINK_OVER:
         ESP_LOGI(TAG, "SC_STATUS_LINK_OVER");
-        //这里乐鑫回调无法给我做是否为微信配网还是 esptouch配网，所以我全部统一为airkiss配网（不认识的全部贾玲处理，哈哈）
+        //这里乐鑫回调目前在master分支已区分是否为微信配网还是esptouch配网，当airkiss配网才近场回调！
         if (pdata != NULL)
         {
-            uint8_t phone_ip[4] = {0};
-            memcpy(phone_ip, (uint8_t *)pdata, 4);
-            ESP_LOGI(TAG, "lcoal phone ip : %d.%d.%d.%d ", phone_ip[0], phone_ip[1], phone_ip[2], phone_ip[3]);
+            sc_callback_data_t *sc_callback_data = (sc_callback_data_t *)pdata;
+            switch (sc_callback_data->type)
+            {
+            case SC_ACK_TYPE_ESPTOUCH:
+                ESP_LOGI(TAG, "Phone ip: %d.%d.%d.%d", sc_callback_data->ip[0], sc_callback_data->ip[1], sc_callback_data->ip[2], sc_callback_data->ip[3]);
+                ESP_LOGI(TAG, "TYPE: ESPTOUCH");
+                xEventGroupSetBits(wifi_event_group, ESPTOUCH_DONE_BIT);
+                break;
+            case SC_ACK_TYPE_AIRKISS:
+                ESP_LOGI(TAG, "TYPE: AIRKISS");
+                xEventGroupSetBits(wifi_event_group, AIRKISS_DONE_BIT);
+                break;
+            default:
+                ESP_LOGE(TAG, "TYPE: ERROR");
+                xEventGroupSetBits(wifi_event_group, ESPTOUCH_DONE_BIT);
+                break;
+            }
         }
-        xEventGroupSetBits(wifi_event_group, ESPTOUCH_DONE_BIT);
+
         break;
     default:
         break;
@@ -266,17 +280,25 @@ void smartconfig_example_task(void *parm)
     ESP_ERROR_CHECK(esp_smartconfig_start(sc_callback));
     while (1)
     {
-        uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY);
+        uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT | AIRKISS_DONE_BIT, true, false, portMAX_DELAY);
         if (uxBits & CONNECTED_BIT)
         {
             ESP_LOGI(TAG, "WiFi Connected to ap");
         }
-        if (uxBits & ESPTOUCH_DONE_BIT)
+
+        if (uxBits & AIRKISS_DONE_BIT)
         {
-            ESP_LOGI(TAG, "smartconfig over");
+            ESP_LOGI(TAG, "smartconfig over , start find device");
             esp_smartconfig_stop();
             startAirkissTask();
             ESP_LOGI(TAG, "getAirkissVersion %s", airkiss_version());
+            vTaskDelete(NULL);
+        }
+
+        if (uxBits & ESPTOUCH_DONE_BIT)
+        {
+            ESP_LOGI(TAG, "smartconfig over , but don't find device by airkiss...");
+            esp_smartconfig_stop();
             vTaskDelete(NULL);
         }
     }
