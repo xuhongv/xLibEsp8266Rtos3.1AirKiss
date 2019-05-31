@@ -30,6 +30,10 @@
  *    有任何技术问题邮箱： 870189248@qq.com
  *    本人GitHub仓库：https://github.com/xuhongv
  *    本人博客：https://blog.csdn.net/xh870189248
+ *    
+ *    注意事项 ------> airkiss2.0 仅可以近场发现，不可以自定义双向通讯！仅可以自定义消息发送给微信客户端！
+ *    下面的deviceInfo可以自定义，但是为了兼容ios手机，必须要base64编码后传给微信静态库SDK！本demo没做base64加密，所以在ios上近场发现失败！
+ *
  * 
  **/
 
@@ -42,13 +46,12 @@ static xTaskHandle handleLlocalFind = NULL;
 static const char *TAG = "xAirKiss";
 
 //airkiss
-#define COUNTS_BOACAST 30               //发包次数，微信建议20次以上
-#define ACCOUNT_ID "gh_083fe269017c"    //微信公众号
-#define LOCAL_UDP_PORT 12476            //固定端口号
-uint8_t deviceInfo[60] = {"xuhongYss"}; //设备ID
+#define COUNTS_BOACAST 30            //发包次数，微信建议20次以上
+#define ACCOUNT_ID "gh_083fe269017c" //微信公众号
+#define LOCAL_UDP_PORT 12476         //固定端口号
+uint8_t deviceInfo[60] = {"5351722"};  //设备ID，也可以任意设置。
 
 int sock_fd;
-struct sockaddr_in client_addr;
 
 const airkiss_config_t akconf = {
     (airkiss_memset_fn)&memset,
@@ -57,72 +60,46 @@ const airkiss_config_t akconf = {
     0,
 };
 
-uint8_t lan_buf[300];
-uint16_t lan_buf_len;
-static void TaskLocalBoacast(void *pvParameters)
-{
-
-    int err;
-    int count = 0;
-    while (1)
-    {
-
-        lan_buf_len = sizeof(lan_buf);
-        airkiss_lan_ret_t ret = airkiss_lan_pack(AIRKISS_LAN_SSDP_NOTIFY_CMD, ACCOUNT_ID, deviceInfo, 0, 0, lan_buf, &lan_buf_len, &akconf);
-
-        if (ret != AIRKISS_LAN_PAKE_READY)
-        {
-            printf("Pack lan packet error! \n");
-            vTaskDelete(NULL);
-        }
-
-        err = sendto(sock_fd, (char *)lan_buf, lan_buf_len, 0, (struct sockaddr *)&client_addr, sizeof(client_addr));
-        ESP_LOGI(TAG, "[SY]  send local !  %d ", count);
-
-        if (err < 0)
-        {
-            printf("[SY] failed to send local ! ... \n");
-        }
-        else
-        {
-            count++;
-            if (count > COUNTS_BOACAST)
-            {
-                vTaskDelete(NULL);
-            }
-        }
-        vTaskDelay(1500 / portTICK_RATE_MS);
-    }
-}
-
 static void TaskCreatSocket(void *pvParameters)
 {
 
     char rx_buffer[128];
     char addr_str[128];
+    uint8_t lan_buf[300];
+    uint16_t lan_buf_len;
+    struct sockaddr_in server_addr;
+    struct sockaddr_in client_addr;
+    int sock_server; /* server socked */
+    int err;
+    int counts = 0;
 
-    sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock_fd == -1)
+    sock_server = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock_server == -1)
     {
-        printf("[xuhong] failed to create sock_fd!\n");
+        printf("failed to create sock_fd!\n");
         vTaskDelete(NULL);
     }
 
-    memset(&client_addr, 0, sizeof(client_addr));
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-    client_addr.sin_port = htons(LOCAL_UDP_PORT);
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY); // inet_addr("255.255.255.255");
+    server_addr.sin_port = htons(LOCAL_UDP_PORT);
 
-    xTaskCreate(TaskLocalBoacast, "TaskLocalBoacast", 1024, NULL, 5, NULL);
+    err = bind(sock_server, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    if (err == -1)
+    {
+        vTaskDelete(NULL);
+    }
 
+    struct sockaddr_in sourceAddr;
+    socklen_t socklen = sizeof(sourceAddr);
     while (1)
     {
-        //sprintf(udp_msg,"");
-        vTaskDelay(1000 / portTICK_RATE_MS);
+        memset(rx_buffer, 0, sizeof(rx_buffer));
+        int len = recvfrom(sock_server, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&sourceAddr, &socklen);
 
-        struct sockaddr_in sourceAddr; // Large enough for both IPv4 or IPv6
-        socklen_t socklen = sizeof(sourceAddr);
-        int len = recvfrom(sock_fd, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&sourceAddr, &socklen);
+        ESP_LOGI(TAG, "IP:%s:%d", (char *)inet_ntoa(sourceAddr.sin_addr), htons(sourceAddr.sin_port));
+        //ESP_LOGI(TAG, "Received %s ", rx_buffer);
 
         // Error occured during receiving
         if (len < 0)
@@ -133,41 +110,53 @@ static void TaskCreatSocket(void *pvParameters)
         // Data received
         else
         {
-            rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-            ESP_LOGI(TAG, "Received %d bytes : %s", len, rx_buffer);
-            airkiss_lan_ret_t ret = airkiss_lan_recv(rx_buffer, len, &akconf);
+            rx_buffer[len] = 0;                                                // Null-terminate whatever we received and treat like a string
+            airkiss_lan_ret_t ret = airkiss_lan_recv(rx_buffer, len, &akconf); //检测是否为微信发的数据包
             airkiss_lan_ret_t packret;
             switch (ret)
             {
             case AIRKISS_LAN_SSDP_REQ:
 
-                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_RESP_CMD, ACCOUNT_ID, deviceInfo, 0, 0, lan_buf, &lan_buf_len, &akconf);
-
+                lan_buf_len = sizeof(lan_buf);
+                //开始组装打包
+                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_NOTIFY_CMD, ACCOUNT_ID, deviceInfo, 0, 0, lan_buf, &lan_buf_len, &akconf);
                 if (packret != AIRKISS_LAN_PAKE_READY)
                 {
-                    printf("Pack lan packet error!");
-                    return;
+                    ESP_LOGE(TAG, "Pack lan packet error!");
+                    continue;
                 }
-
-                inet_ntoa_r(((struct sockaddr_in *)&sourceAddr)->sin_addr.s_addr, addr_str, sizeof(addr_str) - 1);
-
-                int err = sendto(sock_fd, lan_buf, lan_buf_len, 0, (struct sockaddr *)&sourceAddr, sizeof(sourceAddr));
-
+                ESP_LOGI(TAG, "Pack lan packet ok !");
+                //发送至微信客户端
+                int err = sendto(sock_server, (char *)lan_buf, lan_buf_len, 0, (struct sockaddr *)&sourceAddr, sizeof(sourceAddr));
                 if (err < 0)
                 {
                     ESP_LOGE(TAG, "Error occured during sending: errno %d", errno);
-                    break;
                 }
-
                 break;
             default:
-                printf("Pack is not ssdq req!%d\r\n", ret);
                 break;
             }
         }
     }
 
-    vTaskDelete(NULL);
+___shutDownAirkissTask:
+{
+
+    shutdown(sock_fd, 0);
+    close(sock_fd);
+    vTaskDelete(&handleLlocalFind);
+}
+}
+/**
+ * @description: 关闭进程
+ * @param {type} 
+ * @return: 
+ */
+void shutDownAirkissTask()
+{
+    shutdown(sock_fd, 0);
+    close(sock_fd);
+    vTaskDelete(&handleLlocalFind);
 }
 
 bool startAirkissTask()
@@ -185,13 +174,6 @@ bool startAirkissTask()
     {
         return true;
     }
-}
-
-void shutDownAirkissTask()
-{
-    shutdown(sock_fd, 0);
-    close(sock_fd);
-    vTaskDelete(&handleLlocalFind);
 }
 
 void smartconfig_example_task(void *parm);
