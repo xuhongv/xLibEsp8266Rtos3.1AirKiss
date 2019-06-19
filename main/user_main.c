@@ -138,14 +138,6 @@ static void TaskCreatSocket(void *pvParameters)
             }
         }
     }
-
-___shutDownAirkissTask:
-{
-
-    shutdown(sock_fd, 0);
-    close(sock_fd);
-    vTaskDelete(&handleLlocalFind);
-}
 }
 /**
  * @description: 关闭进程
