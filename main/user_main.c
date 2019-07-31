@@ -46,10 +46,9 @@ static const char *TAG = "xAirKiss";
 #define COUNTS_BOACAST 30            //发包次数，微信建议20次以上
 #define ACCOUNT_ID "gh_6b7ce0fcdb0f" //微信公众号
 #define LOCAL_UDP_PORT 12476         //固定端口号
-uint8_t deviceInfo[60] = {"53517"};  //设备ID
 
 //近场发现自定义消息
-uint8_t udpSelfMsg[100] = {"{\"name\":\"xuhong\",\"age\":18}"};
+uint8_t deviceInfo[100] = {"{\"name\":\"xuhong\",\"age\":18}"};
 
 int sock_fd;
 const airkiss_config_t akconf = {
@@ -64,17 +63,13 @@ static void TaskCreatSocket(void *pvParameters)
 
     char rx_buffer[128];
     uint8_t tx_buffer[512];
-
-    char addr_str[128];
     uint8_t lan_buf[300];
     uint16_t lan_buf_len;
-    size_t len;
-
     struct sockaddr_in server_addr;
-    struct sockaddr_in client_addr;
     int sock_server; /* server socked */
     int err;
     int counts = 0;
+    size_t len;
 
     sock_server = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock_server == -1)
@@ -94,18 +89,15 @@ static void TaskCreatSocket(void *pvParameters)
         vTaskDelete(NULL);
     }
 
-    struct sockaddr_in sourceAddr;
-    socklen_t socklen = sizeof(sourceAddr);
-
     //base64加密要发送的数据
-    if (mbedtls_base64_encode(tx_buffer, strlen((char *)tx_buffer), &len, udpSelfMsg, strlen((char *)udpSelfMsg)) != 0)
+    if (mbedtls_base64_encode(tx_buffer, strlen((char *)tx_buffer), &len, deviceInfo, strlen((char *)deviceInfo)) != 0)
     {
         printf("[xuhong] fail mbedtls_base64_encode %s\n", tx_buffer);
         vTaskDelete(NULL);
     }
 
-    printf("[xuhong] success mbedtls_base64_encode %s\n", tx_buffer);
-
+    struct sockaddr_in sourceAddr;
+    socklen_t socklen = sizeof(sourceAddr);
     while (1)
     {
         memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -123,16 +115,16 @@ static void TaskCreatSocket(void *pvParameters)
         // Data received
         else
         {
-            rx_buffer[len] = 0;
+            rx_buffer[len] = 0;                                                // Null-terminate whatever we received and treat like a string
             airkiss_lan_ret_t ret = airkiss_lan_recv(rx_buffer, len, &akconf); //检测是否为微信发的数据包
             airkiss_lan_ret_t packret;
             switch (ret)
             {
             case AIRKISS_LAN_SSDP_REQ:
 
-                lan_buf_len = sizeof(tx_buffer);
+                lan_buf_len = sizeof(lan_buf);
                 //开始组装打包
-                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_NOTIFY_CMD, ACCOUNT_ID, deviceInfo, 0, 0, tx_buffer, &lan_buf_len, &akconf);
+                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_NOTIFY_CMD, ACCOUNT_ID, tx_buffer, 0, 0, lan_buf, &lan_buf_len, &akconf);
                 if (packret != AIRKISS_LAN_PAKE_READY)
                 {
                     ESP_LOGE(TAG, "Pack lan packet error!");
@@ -140,7 +132,7 @@ static void TaskCreatSocket(void *pvParameters)
                 }
                 ESP_LOGI(TAG, "Pack lan packet ok !");
                 //发送至微信客户端
-                int err = sendto(sock_server, (char *)tx_buffer, lan_buf_len, 0, (struct sockaddr *)&sourceAddr, sizeof(sourceAddr));
+                int err = sendto(sock_server, (char *)lan_buf, lan_buf_len, 0, (struct sockaddr *)&sourceAddr, sizeof(sourceAddr));
                 if (err < 0)
                 {
                     ESP_LOGE(TAG, "Error occured during sending: errno %d", errno);
@@ -152,7 +144,6 @@ static void TaskCreatSocket(void *pvParameters)
                     handleLlocalFind = NULL;
                     vTaskDelete(NULL);
                 }
-
                 break;
             default:
                 break;
@@ -160,6 +151,7 @@ static void TaskCreatSocket(void *pvParameters)
         }
     }
 }
+
 /**
  * @description: 关闭进程
  * @param {type} 
