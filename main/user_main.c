@@ -23,6 +23,7 @@
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
+#include "mbedtls/base64.h"
 
 /**
  *    由于 esp-idf esp8266芯片 rtos3.0 sdk 乐鑫没做微信近场发现的功能，于是动动手指做起来！
@@ -30,10 +31,6 @@
  *    有任何技术问题邮箱： 870189248@qq.com
  *    本人GitHub仓库：https://github.com/xuhongv
  *    本人博客：https://blog.csdn.net/xh870189248
- *    
- *    注意事项 ------> airkiss2.0 仅可以近场发现，不可以自定义双向通讯！仅可以自定义消息发送给微信客户端！
- *    下面的deviceInfo可以自定义，但是为了兼容ios手机，必须要base64编码后传给微信静态库SDK！本demo没做base64加密，所以在ios上近场发现失败！
- *
  * 
  **/
 
@@ -47,12 +44,14 @@ static const char *TAG = "xAirKiss";
 
 //airkiss
 #define COUNTS_BOACAST 30            //发包次数，微信建议20次以上
-#define ACCOUNT_ID "gh_083fe269017c" //微信公众号
+#define ACCOUNT_ID "gh_6b7ce0fcdb0f" //微信公众号
 #define LOCAL_UDP_PORT 12476         //固定端口号
-uint8_t deviceInfo[60] = {"5351722"};  //设备ID，也可以任意设置。
+uint8_t deviceInfo[60] = {"53517"};  //设备ID
+
+//近场发现自定义消息
+uint8_t udpSelfMsg[100] = {"{\"name\":\"xuhong\",\"age\":18}"};
 
 int sock_fd;
-
 const airkiss_config_t akconf = {
     (airkiss_memset_fn)&memset,
     (airkiss_memcpy_fn)&memcpy,
@@ -64,9 +63,13 @@ static void TaskCreatSocket(void *pvParameters)
 {
 
     char rx_buffer[128];
+    uint8_t tx_buffer[512];
+
     char addr_str[128];
     uint8_t lan_buf[300];
     uint16_t lan_buf_len;
+    size_t len;
+
     struct sockaddr_in server_addr;
     struct sockaddr_in client_addr;
     int sock_server; /* server socked */
@@ -93,6 +96,16 @@ static void TaskCreatSocket(void *pvParameters)
 
     struct sockaddr_in sourceAddr;
     socklen_t socklen = sizeof(sourceAddr);
+
+    //base64加密要发送的数据
+    if (mbedtls_base64_encode(tx_buffer, strlen((char *)tx_buffer), &len, udpSelfMsg, strlen((char *)udpSelfMsg)) != 0)
+    {
+        printf("[xuhong] fail mbedtls_base64_encode %s\n", tx_buffer);
+        vTaskDelete(NULL);
+    }
+
+    printf("[xuhong] success mbedtls_base64_encode %s\n", tx_buffer);
+
     while (1)
     {
         memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -110,16 +123,16 @@ static void TaskCreatSocket(void *pvParameters)
         // Data received
         else
         {
-            rx_buffer[len] = 0;                                                // Null-terminate whatever we received and treat like a string
+            rx_buffer[len] = 0;
             airkiss_lan_ret_t ret = airkiss_lan_recv(rx_buffer, len, &akconf); //检测是否为微信发的数据包
             airkiss_lan_ret_t packret;
             switch (ret)
             {
             case AIRKISS_LAN_SSDP_REQ:
 
-                lan_buf_len = sizeof(lan_buf);
+                lan_buf_len = sizeof(tx_buffer);
                 //开始组装打包
-                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_NOTIFY_CMD, ACCOUNT_ID, deviceInfo, 0, 0, lan_buf, &lan_buf_len, &akconf);
+                packret = airkiss_lan_pack(AIRKISS_LAN_SSDP_NOTIFY_CMD, ACCOUNT_ID, deviceInfo, 0, 0, tx_buffer, &lan_buf_len, &akconf);
                 if (packret != AIRKISS_LAN_PAKE_READY)
                 {
                     ESP_LOGE(TAG, "Pack lan packet error!");
@@ -127,11 +140,19 @@ static void TaskCreatSocket(void *pvParameters)
                 }
                 ESP_LOGI(TAG, "Pack lan packet ok !");
                 //发送至微信客户端
-                int err = sendto(sock_server, (char *)lan_buf, lan_buf_len, 0, (struct sockaddr *)&sourceAddr, sizeof(sourceAddr));
+                int err = sendto(sock_server, (char *)tx_buffer, lan_buf_len, 0, (struct sockaddr *)&sourceAddr, sizeof(sourceAddr));
                 if (err < 0)
                 {
                     ESP_LOGE(TAG, "Error occured during sending: errno %d", errno);
                 }
+                else if (counts++ > COUNTS_BOACAST)
+                {
+                    shutdown(sock_fd, 0);
+                    close(sock_fd);
+                    handleLlocalFind = NULL;
+                    vTaskDelete(NULL);
+                }
+
                 break;
             default:
                 break;
@@ -155,7 +176,7 @@ bool startAirkissTask()
 {
     int ret = pdFAIL;
     if (handleLlocalFind == NULL)
-        ret = xTaskCreate(TaskCreatSocket, "TaskCreatSocket", 1024 * 3, NULL, 4, &handleLlocalFind);
+        ret = xTaskCreate(TaskCreatSocket, "TaskCreatSocket", 1024 * 4, NULL, 5, &handleLlocalFind);
 
     if (ret != pdPASS)
     {
