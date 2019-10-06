@@ -12,7 +12,7 @@
 
  - 这是一个本人微信公众号测试号的运行的 esp8266 设备端代码工程，运行环境是 `rtos3.1` ！
  - 
- - 此微信公众号测试号的 id 是 `gh_083fe269017c` 。
+ - 此微信公众号测试号的 id 是 `gh_6b7ce0fcdb0f` 。
  - 
  - 如果调试此工程，请微信扫描下面的二维码关注微信公众号即可！
  - 
@@ -26,6 +26,7 @@
 
 
 <p align="center">
-  <img src="png/wechat.jpg" width="200px" height="200px" alt="Banner" />
+  <img src="http://mmbiz.qpic.cn/mmbiz_jpg/51JR1l00qustYVCdJtwPbfGs7b2hq9ic0bGiasmWrXib9DpCzpPKMCLwv54A9928y9HibbeEdUjsyusWvjmRc9jPgA/0" width="200px" height="200px" alt="Banner" />
 </p>
+
 
